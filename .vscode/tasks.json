@@ -1,0 +1,45 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Compile",
+			"type": "shell",
+			"command": "dart",
+			"windows": {
+				"args": [
+					"compile",
+					"exe",
+					"${workspaceFolder}\\bin\\main.dart",
+					"-o",
+					"${workspaceFolder}\\build\\main.exe",
+				],
+			},
+			"args": [
+				"compile",
+				"exe",
+				"${workspaceFolder}/bin/main.dart",
+				"-o",
+				"${workspaceFolder}/build/main",
+			],
+			"problemMatcher": [],
+			"group": {
+				"kind": "build",
+				"isDefault": true,
+			},
+			"dependsOn": "preBuild",
+		},
+		{
+			"label": "preBuild",
+			"type": "shell",
+			"command": "sh",
+			"args": [
+				"${workspaceFolder}${pathSeparator}preBuild.sh",
+			],
+			"group": "build",
+			"options": {
+				"cwd": "${workspaceFolder}",
+			},
+			"problemMatcher": [],
+		},
+	],
+}
