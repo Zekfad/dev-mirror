@@ -22,6 +22,7 @@ void main(List<String> arguments) async {
   if (File.fromUri(Uri.file('.env')).existsSync())
     dotenv.load();
 
+  final InternetAddress localIp = InternetAddress.tryParse(dotenv.env['LOCAL_BIND_IP'] ?? '') ?? InternetAddress.loopbackIPv4;
   final int localPort = int.tryParse(dotenv.env['LOCAL_PORT'] ?? '') ?? 8080;
   final String serverScheme = dotenv.env['SERVER_SCHEME'] ?? 'https';
   final String serverHost = dotenv.env['SERVER_HOST'] ?? 'example.com';
@@ -37,7 +38,7 @@ void main(List<String> arguments) async {
   final String? localBasicAuth = (localUsername != null && localPassword != null)
     ? 'Basic ${base64Encode(utf8.encode('$localUsername:$localPassword'))}'
     : null;
-  final String localBaseUrl = 'http://${InternetAddress.loopbackIPv4.host}:$localPort';
+  final String localBaseUrl = 'http://${localIp.host}:$localPort';
 
   stdout.write('Starting mirror server $localBaseUrl -> $serverBaseUrl');
   if (localBasicAuth != null)
@@ -47,7 +48,7 @@ void main(List<String> arguments) async {
 
   late final HttpServer server;
   try {
-    server = await HttpServer.bind(InternetAddress.loopbackIPv4, localPort);
+    server = await HttpServer.bind(localIp, localPort);
   } catch(error) {
     stdout.writeln(' [Error]');
     stderr.writeln('Error unable to bind server.');
@@ -91,8 +92,7 @@ void main(List<String> arguments) async {
     stdout.write('Proxy: ${request.method} $targetUri');
 
     (client
-      ..userAgent = request.headers['user-agent']?.singleOrNull
-    )
+      ..userAgent = request.headers['user-agent']?.singleOrNull)
       .openUrl(request.method, targetUri)
       .then((HttpClientRequest proxyRequest) {
         if (serverBasicAuth != null)
