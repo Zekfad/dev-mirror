@@ -14,7 +14,7 @@ void addCORSHeaders(HttpRequest request) {
         ? _uri.origin
         : '*',
     )
-    ..add('Access-Control-Allow-Headers', 'authorization')
+    ..add('Access-Control-Allow-Headers', 'authorization,*')
     ..add('Access-Control-Allow-Credentials', 'true');
 }
 
