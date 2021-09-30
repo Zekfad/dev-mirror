@@ -5,6 +5,10 @@ import 'package:uri/uri.dart';
 import 'package:dotenv/dotenv.dart' as dotenv;
 
 
+final List<String> trustedCert = [
+  [72, 80, 78, 151, 76, 13, 172, 91, 92, 212, 118, 200, 32, 34, 116, 178, 76, 140, 113, 114], // DST Root CA X3
+].map((e) => String.fromCharCodes(e)).toList();
+
 void addCORSHeaders(HttpRequest request) {
   Uri? _uri = Uri.tryParse(request.headers['referer']?.singleOrNull ?? '*');
   request.response.headers
@@ -55,8 +59,10 @@ void main(List<String> arguments) async {
     return;
   }
   stdout.writeln(' [Done]');
-  final HttpClient client = HttpClient();
-
+  final HttpClient client = HttpClient()
+    ..badCertificateCallback = (X509Certificate cert, String host, int port) {
+      return trustedCert.contains(String.fromCharCodes(cert.sha1));
+    };
 
   server.listen((HttpRequest request) {
     addCORSHeaders(request);
