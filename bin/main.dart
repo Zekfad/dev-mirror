@@ -18,7 +18,14 @@ void addCORSHeaders(HttpRequest request) {
         ? _uri.origin
         : '*',
     )
-    ..add('Access-Control-Allow-Headers', 'authorization,*')
+    ..add(
+      'Access-Control-Allow-Methods',
+      request.headers['access-control-request-method']?.join(',') ?? '*',
+    )
+    ..add(
+      'Access-Control-Allow-Headers',
+      request.headers['access-control-request-headers']?.join(',') ?? 'authorization,*'
+    )
     ..add('Access-Control-Allow-Credentials', 'true');
 }
 
@@ -68,14 +75,15 @@ void main(List<String> arguments) async {
     addCORSHeaders(request);
     final HttpResponse response = request.response;
 
-    if (localBasicAuth != null) {
-      if (request.method == 'OPTIONS') {
-        response
-          ..statusCode = HttpStatus.ok
-          ..close();
-        return;
-      }
+    // preflight
+    if (request.method == 'OPTIONS' && request.headers['access-control-request-method'] != null) {
+      response
+        ..statusCode = HttpStatus.ok
+        ..close();
+      return;
+    }
 
+    if (localBasicAuth != null) {
       final String? _userAuth = request.headers['authorization']?.singleOrNull;
       if (_userAuth == null || _userAuth != localBasicAuth) {
         response
