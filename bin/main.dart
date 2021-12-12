@@ -78,6 +78,7 @@ void main(List<String> arguments) async {
     // preflight
     if (request.method == 'OPTIONS' && request.headers['access-control-request-method'] != null) {
       response
+        ..contentLength = 0
         ..statusCode = HttpStatus.ok
         ..close();
       return;
@@ -108,7 +109,7 @@ void main(List<String> arguments) async {
     (client
       ..userAgent = request.headers['user-agent']?.singleOrNull)
       .openUrl(request.method, targetUri)
-      .then((HttpClientRequest proxyRequest) {
+      .then((HttpClientRequest proxyRequest) async {
         if (serverBasicAuth != null)
           proxyRequest.headers.add('Authorization', serverBasicAuth);
         request.headers.forEach((name, values) {
@@ -125,6 +126,8 @@ void main(List<String> arguments) async {
             else
               proxyRequest.headers.add(name, values);
         });
+        if (request.contentLength > 0)
+          await proxyRequest.addStream(request);
         return proxyRequest.close();
       })
       .then((HttpClientResponse proxyResponse) async {
