@@ -30,20 +30,14 @@ void addCORSHeaders(HttpRequest request) {
 }
 
 void main(List<String> arguments) async {
-  if (File.fromUri(Uri.file('.env')).existsSync())
-    dotenv.load();
+  String dotEnvFile = arguments.firstOrNull ?? '.env';
+  if (File.fromUri(Uri.file(dotEnvFile)).existsSync())
+    dotenv.load(dotEnvFile);
 
+  // Local server
   final InternetAddress localIp = InternetAddress.tryParse(dotenv.env['LOCAL_BIND_IP'] ?? '') ?? InternetAddress.loopbackIPv4;
   final int localPort = int.tryParse(dotenv.env['LOCAL_PORT'] ?? '') ?? 8080;
-  final String serverScheme = dotenv.env['SERVER_SCHEME'] ?? 'https';
-  final String serverHost = dotenv.env['SERVER_HOST'] ?? 'example.com';
-  final int serverPort = int.tryParse(dotenv.env['SERVER_PORT'] ?? (serverScheme == 'https' ? '443' : '')) ?? 80;
-  final String? serverUsername = dotenv.env['SERVER_USERNAME'];
-  final String? serverPassword = dotenv.env['SERVER_PASSWORD'];
-  final String? serverBasicAuth = (serverUsername != null && serverPassword != null)
-    ? 'Basic ${base64Encode(utf8.encode('$serverUsername:$serverPassword'))}'
-    : null;
-  final String serverBaseUrl = '$serverScheme://$serverHost${![ 'http', 'https', ].contains(serverScheme) ? serverPort : ''}';
+  // Local auth
   final String? localUsername = dotenv.env['LOCAL_USERNAME'];
   final String? localPassword = dotenv.env['LOCAL_PASSWORD'];
   final String? localBasicAuth = (localUsername != null && localPassword != null)
@@ -51,18 +45,50 @@ void main(List<String> arguments) async {
     : null;
   final String localBaseUrl = 'http://${localIp.host}:$localPort';
 
+  // Remote server
+  final String serverScheme = dotenv.env['SERVER_SCHEME'] ?? 'https';
+  final String serverHost = dotenv.env['SERVER_HOST'] ?? 'example.com';
+  final int serverPort = int.tryParse(dotenv.env['SERVER_PORT'] ?? (serverScheme == 'https' ? '443' : '')) ?? 80;
+  // Server auth
+  final String? serverUsername = dotenv.env['SERVER_USERNAME'];
+  final String? serverPassword = dotenv.env['SERVER_PASSWORD'];
+  final String? serverBasicAuth = (serverUsername != null && serverPassword != null)
+    ? 'Basic ${base64Encode(utf8.encode('$serverUsername:$serverPassword'))}'
+    : null;
+  final String serverBaseUrl = '$serverScheme://$serverHost${![ 'http', 'https', ].contains(serverScheme) ? serverPort : ''}';
+
+  final Uri? httpProxy = Uri.tryParse(dotenv.env['HTTP_PROXY'] ?? '::Not valid URI::');
+  final RegExpMatch? match = httpProxy != null
+    ? RegExp(r'^(?<username>.+?):(?<password>.+?)$')
+      .firstMatch(httpProxy.userInfo)
+    : null;
+  final String? proxyUsername = match?.namedGroup('username');
+  final String? proxyPassword = match?.namedGroup('password');
+  final HttpClientBasicCredentials? httpProxyCredentials = (proxyUsername != null && proxyPassword != null)
+    ? HttpClientBasicCredentials(proxyUsername, proxyPassword)
+    : null;
+
   stdout.write('Starting mirror server $localBaseUrl -> $serverBaseUrl');
   if (localBasicAuth != null)
     stdout.write(' [Local auth]');
   if (serverBasicAuth != null)
     stdout.write(' [Remote auth auto-fill]');
+  if (httpProxy != null) {
+    stdout.write(' [Through HTTP proxy]');
+    if (httpProxy.scheme != 'http') {
+      stdout.writeln(' [Error]');
+      stderr.writeln('Proxy URI must be valid.');
+      return;
+    }
+  }
 
   late final HttpServer server;
   try {
     server = await HttpServer.bind(localIp, localPort);
   } catch(error) {
     stdout.writeln(' [Error]');
-    stderr.writeln('Error unable to bind server.');
+    stderr.writeln('Error unable to bind server:');
+    stderr.writeln(error);
     return;
   }
   stdout.writeln(' [Done]');
@@ -71,12 +97,28 @@ void main(List<String> arguments) async {
       return trustedCert.contains(String.fromCharCodes(cert.sha1));
     };
 
+  // HTTP proxy
+  if (httpProxy != null) {
+    if (httpProxyCredentials != null) {
+      client.addProxyCredentials(
+        httpProxy.host,
+        httpProxy.port,
+        'Basic',
+        httpProxyCredentials
+      );
+    }
+    client.findProxy = (uri) => 'PROXY ${httpProxy.host}:${httpProxy.port}';
+  }
+
   server.listen((HttpRequest request) {
     addCORSHeaders(request);
     final HttpResponse response = request.response;
 
     // preflight
-    if (request.method == 'OPTIONS' && request.headers['access-control-request-method'] != null) {
+    if (
+      request.method == 'OPTIONS' &&
+      request.headers[HttpHeaders.accessControlRequestMethodHeader] != null
+    ) {
       response
         ..contentLength = 0
         ..statusCode = HttpStatus.ok
@@ -85,11 +127,11 @@ void main(List<String> arguments) async {
     }
 
     if (localBasicAuth != null) {
-      final String? _userAuth = request.headers['authorization']?.singleOrNull;
+      final String? _userAuth = request.headers[HttpHeaders.authorizationHeader]?.singleOrNull;
       if (_userAuth == null || _userAuth != localBasicAuth) {
         response
           ..statusCode = HttpStatus.unauthorized
-          ..headers.add('WWW-Authenticate', 'Basic realm=Protected')
+          ..headers.add(HttpHeaders.wwwAuthenticateHeader, 'Basic realm=Protected')
           ..headers.contentType = ContentType.text
           ..write('PROXY///ERROR///UNAUTHORIZED')
           ..close();
@@ -111,12 +153,13 @@ void main(List<String> arguments) async {
       .openUrl(request.method, targetUri)
       .then((HttpClientRequest proxyRequest) async {
         if (serverBasicAuth != null)
-          proxyRequest.headers.add('Authorization', serverBasicAuth);
-        request.headers.forEach((name, values) {
+          proxyRequest.headers.add(HttpHeaders.authorizationHeader, serverBasicAuth);
+        request.headers.forEach((String name, List<String> values) {
           if (![
-            'host',
-          ].contains(name))
-            if (name == 'referer')
+            // Headers to skip
+            HttpHeaders.hostHeader,
+          ].contains(name)) {
+            if (name == HttpHeaders.refererHeader)
               proxyRequest.headers.add(
                 name,
                 values.map(
@@ -125,6 +168,7 @@ void main(List<String> arguments) async {
               );
             else
               proxyRequest.headers.add(name, values);
+          }
         });
         if (request.contentLength > 0)
           await proxyRequest.addStream(request);
@@ -134,9 +178,9 @@ void main(List<String> arguments) async {
         stdout.write(' [${proxyResponse.statusCode}]');
         proxyResponse.headers.forEach((name, values) {
           if (![
-            'connection',
-            'content-length',
-            'content-encoding',
+            HttpHeaders.connectionHeader,
+            HttpHeaders.contentLengthHeader,
+            HttpHeaders.contentEncodingHeader,
           ].contains(name))
             response.headers.add(name, values);
         });
