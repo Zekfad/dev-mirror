@@ -1,16 +1,17 @@
-import 'dart:io';
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:collection/collection.dart';
-import 'package:uri/uri.dart';
 import 'package:dotenv/dotenv.dart' as dotenv;
+import 'package:uri/uri.dart';
 
 
 final List<String> trustedCert = [
   [72, 80, 78, 151, 76, 13, 172, 91, 92, 212, 118, 200, 32, 34, 116, 178, 76, 140, 113, 114], // DST Root CA X3
-].map((e) => String.fromCharCodes(e)).toList();
+].map(String.fromCharCodes).toList();
 
 void addCORSHeaders(HttpRequest request) {
-  Uri? _uri = Uri.tryParse(request.headers['referer']?.singleOrNull ?? '*');
+  final _uri = Uri.tryParse(request.headers['referer']?.singleOrNull ?? '*');
   request.response.headers
     ..add(
       'Access-Control-Allow-Origin',
@@ -24,47 +25,47 @@ void addCORSHeaders(HttpRequest request) {
     )
     ..add(
       'Access-Control-Allow-Headers',
-      request.headers['access-control-request-headers']?.join(',') ?? 'authorization,*'
+      request.headers['access-control-request-headers']?.join(',') ?? 'authorization,*',
     )
     ..add('Access-Control-Allow-Credentials', 'true');
 }
 
 void main(List<String> arguments) async {
-  String dotEnvFile = arguments.firstOrNull ?? '.env';
+  final dotEnvFile = arguments.firstOrNull ?? '.env';
   if (File.fromUri(Uri.file(dotEnvFile)).existsSync())
     dotenv.load(dotEnvFile);
 
   // Local server
-  final InternetAddress localIp = InternetAddress.tryParse(dotenv.env['LOCAL_BIND_IP'] ?? '') ?? InternetAddress.loopbackIPv4;
-  final int localPort = int.tryParse(dotenv.env['LOCAL_PORT'] ?? '') ?? 8080;
+  final localIp = InternetAddress.tryParse(dotenv.env['LOCAL_BIND_IP'] ?? '') ?? InternetAddress.loopbackIPv4;
+  final localPort = int.tryParse(dotenv.env['LOCAL_PORT'] ?? '') ?? 8080;
   // Local auth
-  final String? localUsername = dotenv.env['LOCAL_USERNAME'];
-  final String? localPassword = dotenv.env['LOCAL_PASSWORD'];
-  final String? localBasicAuth = (localUsername != null && localPassword != null)
+  final localUsername = dotenv.env['LOCAL_USERNAME'];
+  final localPassword = dotenv.env['LOCAL_PASSWORD'];
+  final localBasicAuth = (localUsername != null && localPassword != null)
     ? 'Basic ${base64Encode(utf8.encode('$localUsername:$localPassword'))}'
     : null;
-  final String localBaseUrl = 'http://${localIp.host}:$localPort';
+  final localBaseUrl = 'http://${localIp.host}:$localPort';
 
   // Remote server
-  final String serverScheme = dotenv.env['SERVER_SCHEME'] ?? 'https';
-  final String serverHost = dotenv.env['SERVER_HOST'] ?? 'example.com';
-  final int serverPort = int.tryParse(dotenv.env['SERVER_PORT'] ?? (serverScheme == 'https' ? '443' : '')) ?? 80;
+  final serverScheme = dotenv.env['SERVER_SCHEME'] ?? 'https';
+  final serverHost = dotenv.env['SERVER_HOST'] ?? 'example.com';
+  final serverPort = int.tryParse(dotenv.env['SERVER_PORT'] ?? (serverScheme == 'https' ? '443' : '')) ?? 80;
   // Server auth
-  final String? serverUsername = dotenv.env['SERVER_USERNAME'];
-  final String? serverPassword = dotenv.env['SERVER_PASSWORD'];
-  final String? serverBasicAuth = (serverUsername != null && serverPassword != null)
+  final serverUsername = dotenv.env['SERVER_USERNAME'];
+  final serverPassword = dotenv.env['SERVER_PASSWORD'];
+  final serverBasicAuth = (serverUsername != null && serverPassword != null)
     ? 'Basic ${base64Encode(utf8.encode('$serverUsername:$serverPassword'))}'
     : null;
-  final String serverBaseUrl = '$serverScheme://$serverHost${![ 'http', 'https', ].contains(serverScheme) ? serverPort : ''}';
+  final serverBaseUrl = '$serverScheme://$serverHost${![ 'http', 'https', ].contains(serverScheme) ? serverPort : ''}';
 
-  final Uri? httpProxy = Uri.tryParse(dotenv.env['HTTP_PROXY'] ?? '::Not valid URI::');
-  final RegExpMatch? match = httpProxy != null
+  final httpProxy = Uri.tryParse(dotenv.env['HTTP_PROXY'] ?? '::Not valid URI::');
+  final match = httpProxy != null
     ? RegExp(r'^(?<username>.+?):(?<password>.+?)$')
       .firstMatch(httpProxy.userInfo)
     : null;
-  final String? proxyUsername = match?.namedGroup('username');
-  final String? proxyPassword = match?.namedGroup('password');
-  final HttpClientBasicCredentials? httpProxyCredentials = (proxyUsername != null && proxyPassword != null)
+  final proxyUsername = match?.namedGroup('username');
+  final proxyPassword = match?.namedGroup('password');
+  final httpProxyCredentials = (proxyUsername != null && proxyPassword != null)
     ? HttpClientBasicCredentials(proxyUsername, proxyPassword)
     : null;
 
@@ -87,15 +88,15 @@ void main(List<String> arguments) async {
     server = await HttpServer.bind(localIp, localPort);
   } catch(error) {
     stdout.writeln(' [Error]');
-    stderr.writeln('Error unable to bind server:');
-    stderr.writeln(error);
+    stderr
+      ..writeln('Error unable to bind server:')
+      ..writeln(error);
     return;
   }
   stdout.writeln(' [Done]');
-  final HttpClient client = HttpClient()
-    ..badCertificateCallback = (X509Certificate cert, String host, int port) {
-      return trustedCert.contains(String.fromCharCodes(cert.sha1));
-    };
+  final client = HttpClient()
+    ..badCertificateCallback = (cert, host, port) =>
+      trustedCert.contains(String.fromCharCodes(cert.sha1));
 
   // HTTP proxy
   if (httpProxy != null) {
@@ -104,15 +105,15 @@ void main(List<String> arguments) async {
         httpProxy.host,
         httpProxy.port,
         'Basic',
-        httpProxyCredentials
+        httpProxyCredentials,
       );
     }
     client.findProxy = (uri) => 'PROXY ${httpProxy.host}:${httpProxy.port}';
   }
 
-  server.listen((HttpRequest request) {
+  server.listen((request) {
     addCORSHeaders(request);
-    final HttpResponse response = request.response;
+    final response = request.response;
 
     // preflight
     if (
@@ -127,7 +128,7 @@ void main(List<String> arguments) async {
     }
 
     if (localBasicAuth != null) {
-      final String? _userAuth = request.headers[HttpHeaders.authorizationHeader]?.singleOrNull;
+      final _userAuth = request.headers[HttpHeaders.authorizationHeader]?.singleOrNull;
       if (_userAuth == null || _userAuth != localBasicAuth) {
         response
           ..statusCode = HttpStatus.unauthorized
@@ -139,7 +140,7 @@ void main(List<String> arguments) async {
       }
     }
 
-    final Uri targetUri = (UriBuilder
+    final targetUri = (UriBuilder
       .fromUri(request.uri)
       ..scheme = serverScheme
       ..host = serverHost
@@ -151,10 +152,10 @@ void main(List<String> arguments) async {
     (client
       ..userAgent = request.headers['user-agent']?.singleOrNull)
       .openUrl(request.method, targetUri)
-      .then((HttpClientRequest proxyRequest) async {
+      .then((proxyRequest) async {
         if (serverBasicAuth != null)
           proxyRequest.headers.add(HttpHeaders.authorizationHeader, serverBasicAuth);
-        request.headers.forEach((String name, List<String> values) {
+        request.headers.forEach((name, values) {
           if (![
             // Headers to skip
             HttpHeaders.hostHeader,
@@ -163,7 +164,7 @@ void main(List<String> arguments) async {
               proxyRequest.headers.add(
                 name,
                 values.map(
-                  (String value) => value.replaceAll(localBaseUrl, serverBaseUrl),
+                  (value) => value.replaceAll(localBaseUrl, serverBaseUrl),
                 ),
               );
             else
@@ -174,28 +175,33 @@ void main(List<String> arguments) async {
           await proxyRequest.addStream(request);
         return proxyRequest.close();
       })
-      .then((HttpClientResponse proxyResponse) async {
-        stdout.write(' [${proxyResponse.statusCode}]');
-        proxyResponse.headers.forEach((name, values) {
-          if (![
-            HttpHeaders.connectionHeader,
-            HttpHeaders.contentLengthHeader,
-            HttpHeaders.contentEncodingHeader,
-          ].contains(name))
-            response.headers.add(name, values);
-        });
-        response.statusCode = proxyResponse.statusCode;
-        proxyResponse.pipe(response).then((value) => stdout.writeln(' [Done]'));
-      })
-      .catchError((error) {
-        stdout.writeln(' [Error]');
-        stderr.writeln('Proxy error details: $error');
-        response
-          ..statusCode = HttpStatus.internalServerError
-          ..headers.contentType = ContentType.text
-          ..writeln('PROXY///ERROR///INTERNAL')
-          ..write(error)
-          ..close();
-      });
+      .then(
+        (proxyResponse) async {
+          stdout.write(' [${proxyResponse.statusCode}]');
+          proxyResponse.headers.forEach((name, values) {
+            if (![
+              HttpHeaders.connectionHeader,
+              HttpHeaders.contentLengthHeader,
+              HttpHeaders.contentEncodingHeader,
+            ].contains(name))
+              response.headers.add(name, values);
+          });
+          response.statusCode = proxyResponse.statusCode;
+          proxyResponse
+            .pipe(response)
+            .then((value) => stdout.writeln(' [Done]'))
+            .ignore();
+        },
+        onError: (dynamic error) {
+          stdout.writeln(' [Error]');
+          stderr.writeln('Proxy error details: $error');
+          response
+            ..statusCode = HttpStatus.internalServerError
+            ..headers.contentType = ContentType.text
+            ..writeln('PROXY///ERROR///INTERNAL')
+            ..write(error)
+            ..close();
+        },
+      );
   });
 }
