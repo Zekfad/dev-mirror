@@ -6,28 +6,72 @@ import 'package:dotenv/dotenv.dart' as dotenv;
 import 'package:uri/uri.dart';
 
 
-final List<String> trustedCert = [
+/// Invalid string URI.
+const _invalidUri = '::Not valid URI::';
+const headersNotToForwardToRemote = [
+  HttpHeaders.hostHeader,
+];
+const headersToSpoofBeforeForwardToRemote = [
+  HttpHeaders.refererHeader,
+];
+const headersNotToForwardFromRemote = [
+  HttpHeaders.connectionHeader,
+];
+const headersToSpoofBeforeForwardFromRemote = [
+  HttpHeaders.locationHeader,
+];
+
+
+extension UriHasOrigin on Uri {
+  bool get hasOrigin => (scheme == 'http' || scheme == 'https') && host != '';
+}
+
+/// List of additional root CA
+final List<String> trustedRoots = [
   [72, 80, 78, 151, 76, 13, 172, 91, 92, 212, 118, 200, 32, 34, 116, 178, 76, 140, 113, 114], // DST Root CA X3
 ].map(String.fromCharCodes).toList();
 
-void addCORSHeaders(HttpRequest request) {
-  final _uri = Uri.tryParse(request.headers['referer']?.singleOrNull ?? '*');
-  request.response.headers
+bool secureCompare(String a, String b) {
+  if(a.codeUnits.length != b.codeUnits.length)
+    return false;
+
+  var r = 0;
+  for(var i = 0; i < a.codeUnits.length; i++) {
+    r |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+  }
+  return r == 0;
+}
+
+/// Returns environment variable or `.env` variable
+String? getEnv(String variable) =>
+  Platform.environment[variable] ?? dotenv.env[variable];
+
+/// Adds CORS headers to [response]
+void addCORSHeaders(HttpRequest request, HttpResponse response) {
+  final refererUri = Uri.tryParse(
+    request.headers[HttpHeaders.refererHeader]?.singleOrNull ?? _invalidUri,
+  );
+  response.headers
     ..add(
-      'Access-Control-Allow-Origin',
-      (_uri != null && (const [ 'http', 'https', ]).contains(_uri.scheme) && _uri.host != '')
-        ? _uri.origin
+      HttpHeaders.accessControlAllowOriginHeader,
+      (refererUri != null && refererUri.hasOrigin)
+        ? refererUri.origin
         : '*',
     )
     ..add(
-      'Access-Control-Allow-Methods',
-      request.headers['access-control-request-method']?.join(',') ?? '*',
+      HttpHeaders.accessControlAllowMethodsHeader,
+      request.headers[HttpHeaders.accessControlRequestMethodHeader]?.join(',')
+        ?? '*',
     )
     ..add(
-      'Access-Control-Allow-Headers',
-      request.headers['access-control-request-headers']?.join(',') ?? 'authorization,*',
+      HttpHeaders.accessControlAllowHeadersHeader,
+      request.headers[HttpHeaders.accessControlRequestHeadersHeader]?.join(',')
+        ?? 'authorization,*',
     )
-    ..add('Access-Control-Allow-Credentials', 'true');
+    ..add(
+      HttpHeaders.accessControlAllowCredentialsHeader,
+      'true',
+    );
 }
 
 void main(List<String> arguments) async {
@@ -35,44 +79,42 @@ void main(List<String> arguments) async {
   if (File.fromUri(Uri.file(dotEnvFile)).existsSync())
     dotenv.load(dotEnvFile);
 
-  // Local server
-  final localIp = InternetAddress.tryParse(dotenv.env['LOCAL_BIND_IP'] ?? '') ?? InternetAddress.loopbackIPv4;
-  final localPort = int.tryParse(dotenv.env['LOCAL_PORT'] ?? '') ?? 8080;
+  // Local server bind settings
+  final localBindIp = InternetAddress.tryParse(getEnv('LOCAL_BIND_IP') ?? '') ?? InternetAddress.loopbackIPv4;
+  final localPort = int.tryParse(getEnv('LOCAL_PORT') ?? '') ?? 8080;
+
   // Local auth
-  final localUsername = dotenv.env['LOCAL_USERNAME'];
-  final localPassword = dotenv.env['LOCAL_PASSWORD'];
-  final localBasicAuth = (localUsername != null && localPassword != null)
-    ? 'Basic ${base64Encode(utf8.encode('$localUsername:$localPassword'))}'
-    : null;
-  final localBaseUrl = 'http://${localIp.host}:$localPort';
+  final localUsername = getEnv('LOCAL_USERNAME');
+  final localPassword = getEnv('LOCAL_PASSWORD');
+  final localBasicAuth = (localUsername == null || localPassword == null) ? null
+    : 'Basic ${base64Encode(utf8.encode('$localUsername:$localPassword'))}';
+  final localBaseUrl = 'http://${localBindIp.host}:$localPort';
 
   // Remote server
-  final serverScheme = dotenv.env['SERVER_SCHEME'] ?? 'https';
-  final serverHost = dotenv.env['SERVER_HOST'] ?? 'example.com';
-  final serverPort = int.tryParse(dotenv.env['SERVER_PORT'] ?? (serverScheme == 'https' ? '443' : '')) ?? 80;
-  // Server auth
-  final serverUsername = dotenv.env['SERVER_USERNAME'];
-  final serverPassword = dotenv.env['SERVER_PASSWORD'];
-  final serverBasicAuth = (serverUsername != null && serverPassword != null)
-    ? 'Basic ${base64Encode(utf8.encode('$serverUsername:$serverPassword'))}'
-    : null;
-  final serverBaseUrl = '$serverScheme://$serverHost${![ 'http', 'https', ].contains(serverScheme) ? serverPort : ''}';
+  final remoteScheme = getEnv('SERVER_SCHEME') ?? 'https';
+  final remoteHost = getEnv('SERVER_HOST') ?? 'example.com';
+  final remotePort = int.tryParse(getEnv('SERVER_PORT') ?? (remoteScheme == 'https' ? '443' : '')) ?? 80;
 
-  final httpProxy = Uri.tryParse(dotenv.env['HTTP_PROXY'] ?? '::Not valid URI::');
-  final match = httpProxy != null
-    ? RegExp(r'^(?<username>.+?):(?<password>.+?)$')
-      .firstMatch(httpProxy.userInfo)
-    : null;
-  final proxyUsername = match?.namedGroup('username');
-  final proxyPassword = match?.namedGroup('password');
-  final httpProxyCredentials = (proxyUsername != null && proxyPassword != null)
-    ? HttpClientBasicCredentials(proxyUsername, proxyPassword)
-    : null;
+  // Remote server auth
+  final remoteUsername = getEnv('SERVER_USERNAME');
+  final remotePassword = getEnv('SERVER_PASSWORD');
+  final remoteBasicAuth = (remoteUsername == null || remotePassword == null) ? null
+    : 'Basic ${base64Encode(utf8.encode('$remoteUsername:$remotePassword'))}';
+  final serverBaseUrl = '$remoteScheme://$remoteHost${![ 'http', 'https', ].contains(remoteScheme) ? remotePort : ''}';
+
+  // HTTP proxy
+  final httpProxy = Uri.tryParse(getEnv('HTTP_PROXY') ?? _invalidUri);
+  final httpProxyCredentialsMatch = httpProxy == null ? null
+    : RegExp(r'^(?<username>.+?):(?<password>.+?)$').firstMatch(httpProxy.userInfo);
+  final httpProxyUsername = httpProxyCredentialsMatch?.namedGroup('username');
+  final httpProxyPassword = httpProxyCredentialsMatch?.namedGroup('password');
+  final httpProxyCredentials = (httpProxyUsername == null || httpProxyPassword == null) ? null
+    : HttpClientBasicCredentials(httpProxyUsername, httpProxyPassword);
 
   stdout.write('Starting mirror server $localBaseUrl -> $serverBaseUrl');
   if (localBasicAuth != null)
     stdout.write(' [Local auth]');
-  if (serverBasicAuth != null)
+  if (remoteBasicAuth != null)
     stdout.write(' [Remote auth auto-fill]');
   if (httpProxy != null) {
     stdout.write(' [Through HTTP proxy]');
@@ -85,7 +127,7 @@ void main(List<String> arguments) async {
 
   late final HttpServer server;
   try {
-    server = await HttpServer.bind(localIp, localPort);
+    server = await HttpServer.bind(localBindIp, localPort);
   } catch(error) {
     stdout.writeln(' [Error]');
     stderr
@@ -94,11 +136,13 @@ void main(List<String> arguments) async {
     return;
   }
   stdout.writeln(' [Done]');
-  final client = HttpClient()
-    ..badCertificateCallback = (cert, host, port) =>
-      trustedCert.contains(String.fromCharCodes(cert.sha1));
 
-  // HTTP proxy
+  final client = HttpClient()
+    ..autoUncompress = false
+    ..badCertificateCallback = (cert, host, port) =>
+      trustedRoots.contains(String.fromCharCodes(cert.sha1));
+
+  // Apply HTTP proxy
   if (httpProxy != null) {
     if (httpProxyCredentials != null) {
       client.addProxyCredentials(
@@ -111,15 +155,21 @@ void main(List<String> arguments) async {
     client.findProxy = (uri) => 'PROXY ${httpProxy.host}:${httpProxy.port}';
   }
 
+  var requestId = 0;
+
   server.listen((request) {
-    addCORSHeaders(request);
+    requestId++;
+
     final response = request.response;
 
-    // preflight
+    addCORSHeaders(request, response);
+
+    // Handle preflight
     if (
-      request.method == 'OPTIONS' &&
+      request.method.toUpperCase() == 'OPTIONS' &&
       request.headers[HttpHeaders.accessControlRequestMethodHeader] != null
     ) {
+      stdout.writeln('[$requestId] Preflight handled.');
       response
         ..contentLength = 0
         ..statusCode = HttpStatus.ok
@@ -129,7 +179,8 @@ void main(List<String> arguments) async {
 
     if (localBasicAuth != null) {
       final _userAuth = request.headers[HttpHeaders.authorizationHeader]?.singleOrNull;
-      if (_userAuth == null || _userAuth != localBasicAuth) {
+      if (_userAuth == null || !secureCompare(_userAuth, localBasicAuth)) {
+        stdout.writeln('[$requestId] Unauthorized access denied.');
         response
           ..statusCode = HttpStatus.unauthorized
           ..headers.add(HttpHeaders.wwwAuthenticateHeader, 'Basic realm=Protected')
@@ -140,61 +191,92 @@ void main(List<String> arguments) async {
       }
     }
 
-    final targetUri = (UriBuilder
-      .fromUri(request.uri)
-      ..scheme = serverScheme
-      ..host = serverHost
-      ..port = serverPort
+    final remoteUri = (UriBuilder.fromUri(request.uri)
+      ..scheme = remoteScheme
+      ..host = remoteHost
+      ..port = remotePort
     ).build();
 
-    stdout.write('Proxy: ${request.method} $targetUri');
+    stdout.writeln('[$requestId] Forwarding: ${request.method} $remoteUri');
 
-    (client
-      ..userAgent = request.headers['user-agent']?.singleOrNull)
-      .openUrl(request.method, targetUri)
-      .then((proxyRequest) async {
-        if (serverBasicAuth != null)
-          proxyRequest.headers.add(HttpHeaders.authorizationHeader, serverBasicAuth);
-        request.headers.forEach((name, values) {
-          if (![
-            // Headers to skip
-            HttpHeaders.hostHeader,
-          ].contains(name)) {
-            if (name == HttpHeaders.refererHeader)
-              proxyRequest.headers.add(
-                name,
-                values.map(
+    (client..userAgent = request.headers[HttpHeaders.userAgentHeader]?.singleOrNull)
+      .openUrl(request.method, remoteUri)
+      .then((requestToRemote) async {
+        requestToRemote.followRedirects = false;
+
+        // Remote server auth
+        if (remoteBasicAuth != null)
+          requestToRemote.headers.add(HttpHeaders.authorizationHeader, remoteBasicAuth);
+
+        request.headers.forEach((headerName, headerValues) {
+          // Filter out headers
+          if (!headersNotToForwardToRemote.contains(headerName)) {
+            // Spoof headers to look like from the original server
+            if (headersToSpoofBeforeForwardToRemote.contains(headerName))
+              requestToRemote.headers.add(
+                headerName,
+                headerValues.map(
                   (value) => value.replaceAll(localBaseUrl, serverBaseUrl),
                 ),
               );
             else
-              proxyRequest.headers.add(name, values);
+            // Forward headers as-is
+              requestToRemote.headers.add(headerName, headerValues);
           }
         });
+
+        // If there's content pipe request body
         if (request.contentLength > 0)
-          await proxyRequest.addStream(request);
-        return proxyRequest.close();
+          await requestToRemote.addStream(request);
+
+        return requestToRemote.close();
       })
       .then(
-        (proxyResponse) async {
-          stdout.write(' [${proxyResponse.statusCode}]');
-          proxyResponse.headers.forEach((name, values) {
-            if (![
-              HttpHeaders.connectionHeader,
-              HttpHeaders.contentLengthHeader,
-              HttpHeaders.contentEncodingHeader,
-            ].contains(name))
-              response.headers.add(name, values);
+        (remoteResponse) async {
+          stdout.writeln('[$requestId] Remote response: ${remoteResponse.statusCode}');
+          remoteResponse.headers.forEach((headerName, headerValues) {
+            // Filter out headers
+            if (!headersNotToForwardFromRemote.contains(headerName))
+              // Spoof headers, so they'll point to mirror
+              if (headersToSpoofBeforeForwardFromRemote.contains(headerName))
+                response.headers.add(
+                  headerName,
+                  headerValues.map(
+                    (value) => value.replaceAll(serverBaseUrl, localBaseUrl),
+                  ),
+                );
+              // Add headers as-is
+              else
+                response.headers.add(headerName, headerValues);
           });
-          response.statusCode = proxyResponse.statusCode;
-          proxyResponse
+          response.statusCode = remoteResponse.statusCode;
+
+          // Pipe remote response
+          remoteResponse
             .pipe(response)
-            .then((value) => stdout.writeln(' [Done]'))
+            .then(
+              (_) => stdout.writeln('[$requestId] Forwarded.'),
+              onError: (dynamic error) {
+                final _error = error.toString().splitMapJoin(
+                  '\n',
+                  onNonMatch: (part) => '[$requestId] $part',
+                );
+                stderr
+                  ..writeln('[$requestId] Response forwarding error:')
+                  ..writeln(_error);
+              },
+            )
             .ignore();
         },
         onError: (dynamic error) {
-          stdout.writeln(' [Error]');
-          stderr.writeln('Proxy error details: $error');
+          final _error = error.toString().splitMapJoin(
+            '\n',
+            onNonMatch: (part) => '[$requestId] $part',
+          );
+          stderr
+            ..writeln('[$requestId] Mirror error:')
+            ..writeln(_error);
+
           response
             ..statusCode = HttpStatus.internalServerError
             ..headers.contentType = ContentType.text
