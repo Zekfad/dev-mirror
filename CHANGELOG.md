@@ -1,3 +1,16 @@
+# 1.2.0
+
+- Add `Access-Control-Expose-Headers` header if none is provided by server.
+- Rename environment variables:
+  `SERVER_SCHEME` -> `REMOTE_SCHEME`
+  `SERVER_HOST` -> `REMOTE_HOST`
+  `SERVER_USERNAME` -> `REMOTE_USERNAME`
+  `SERVER_PASSWORD` -> `REMOTE_PASSWORD`
+  `SERVER_POST` -> `REMOTE_POST`
+  `LOCAL_BIND_IP` -> `LOCAL_HOST`
+- Now you can use just `LOCAL_URI` and `REMOTE_URI` same as `HTTP_PROXY`,
+  this simplifies usage from console.
+
 # 1.1.2
 
 - Add support for internal redirects.

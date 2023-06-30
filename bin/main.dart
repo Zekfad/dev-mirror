@@ -1,13 +1,14 @@
-import 'dart:convert';
 import 'dart:io';
 
-import 'package:collection/collection.dart';
-import 'package:dotenv/dotenv.dart' as dotenv;
+import 'package:dev_mirror/config.dart';
+import 'package:dev_mirror/secure_compare.dart';
+import 'package:dev_mirror/uri_basic_auth.dart';
+import 'package:dev_mirror/uri_credentials.dart';
+import 'package:dev_mirror/uri_has_origin.dart';
 import 'package:uri/uri.dart';
 
 
 /// Invalid string URI.
-const _invalidUri = '::Not valid URI::';
 const headersNotToForwardToRemote = [
   HttpHeaders.hostHeader,
 ];
@@ -22,103 +23,56 @@ const headersToSpoofBeforeForwardFromRemote = [
 ];
 
 
-extension UriHasOrigin on Uri {
-  bool get hasOrigin => (scheme == 'http' || scheme == 'https') && host != '';
-}
-
 /// List of additional root CA
 final List<String> trustedRoots = [
   [72, 80, 78, 151, 76, 13, 172, 91, 92, 212, 118, 200, 32, 34, 116, 178, 76, 140, 113, 114], // DST Root CA X3
 ].map(String.fromCharCodes).toList();
 
-bool secureCompare(String a, String b) {
-  if(a.codeUnits.length != b.codeUnits.length)
-    return false;
-
-  var r = 0;
-  for(var i = 0; i < a.codeUnits.length; i++) {
-    r |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
-  }
-  return r == 0;
-}
-
-/// Returns environment variable or `.env` variable
-String? getEnv(String variable) =>
-  Platform.environment[variable] ?? dotenv.env[variable];
-
 /// Adds CORS headers to [response]
 void addCORSHeaders(HttpRequest request, HttpResponse response) {
   final refererUri = Uri.tryParse(
-    request.headers[HttpHeaders.refererHeader]?.singleOrNull ?? _invalidUri,
+    request.headers[HttpHeaders.refererHeader]?.singleOrNull ?? '::INVALID::',
   );
   response.headers
-    ..add(
+    ..set(
       HttpHeaders.accessControlAllowOriginHeader,
       (refererUri != null && refererUri.hasOrigin)
         ? refererUri.origin
         : '*',
     )
-    ..add(
+    ..set(
       HttpHeaders.accessControlAllowMethodsHeader,
       request.headers[HttpHeaders.accessControlRequestMethodHeader]?.join(',')
         ?? '*',
     )
-    ..add(
+    ..set(
       HttpHeaders.accessControlAllowHeadersHeader,
       request.headers[HttpHeaders.accessControlRequestHeadersHeader]?.join(',')
         ?? 'authorization,*',
     )
-    ..add(
+    ..set(
       HttpHeaders.accessControlAllowCredentialsHeader,
       'true',
+    )
+    ..set(
+      HttpHeaders.accessControlExposeHeadersHeader,
+      request.headers[HttpHeaders.accessControlExposeHeadersHeader]?.join(',')
+        ?? 'authorization,*',
     );
 }
 
 void main(List<String> arguments) async {
   final dotEnvFile = arguments.firstOrNull ?? '.env';
-  if (File.fromUri(Uri.file(dotEnvFile)).existsSync())
-    dotenv.load(dotEnvFile);
+  final config = Config.load(dotEnvFile);
 
-  // Local server bind settings
-  final localBindIp = InternetAddress.tryParse(getEnv('LOCAL_BIND_IP') ?? '') ?? InternetAddress.loopbackIPv4;
-  final localPort = int.tryParse(getEnv('LOCAL_PORT') ?? '') ?? 8080;
-
-  // Local auth
-  final localUsername = getEnv('LOCAL_USERNAME');
-  final localPassword = getEnv('LOCAL_PASSWORD');
-  final localBasicAuth = (localUsername == null || localPassword == null) ? null
-    : 'Basic ${base64Encode(utf8.encode('$localUsername:$localPassword'))}';
-  final localBaseUrl = 'http://${localBindIp.host}:$localPort';
-
-  // Remote server
-  final remoteScheme = getEnv('SERVER_SCHEME') ?? 'https';
-  final remoteHost = getEnv('SERVER_HOST') ?? 'example.com';
-  final remotePort = int.tryParse(getEnv('SERVER_PORT') ?? (remoteScheme == 'https' ? '443' : '')) ?? 80;
-
-  // Remote server auth
-  final remoteUsername = getEnv('SERVER_USERNAME');
-  final remotePassword = getEnv('SERVER_PASSWORD');
-  final remoteBasicAuth = (remoteUsername == null || remotePassword == null) ? null
-    : 'Basic ${base64Encode(utf8.encode('$remoteUsername:$remotePassword'))}';
-  final serverBaseUrl = '$remoteScheme://$remoteHost${![ 'http', 'https', ].contains(remoteScheme) ? remotePort : ''}';
-
-  // HTTP proxy
-  final httpProxy = Uri.tryParse(getEnv('HTTP_PROXY') ?? _invalidUri);
-  final httpProxyCredentialsMatch = httpProxy == null ? null
-    : RegExp(r'^(?<username>.+?):(?<password>.+?)$').firstMatch(httpProxy.userInfo);
-  final httpProxyUsername = httpProxyCredentialsMatch?.namedGroup('username');
-  final httpProxyPassword = httpProxyCredentialsMatch?.namedGroup('password');
-  final httpProxyCredentials = (httpProxyUsername == null || httpProxyPassword == null) ? null
-    : HttpClientBasicCredentials(httpProxyUsername, httpProxyPassword);
-
-  stdout.write('Starting mirror server $localBaseUrl -> $serverBaseUrl');
-  if (localBasicAuth != null)
+  stdout.write('Starting mirror server ${config.local} -> ${config.remote}');
+  if (config.local.basicAuth != null)
     stdout.write(' [Local auth]');
-  if (remoteBasicAuth != null)
+  if (config.remote.basicAuth != null)
     stdout.write(' [Remote auth auto-fill]');
-  if (httpProxy != null) {
+  if (config.proxy != null) {
     stdout.write(' [Through HTTP proxy]');
-    if (httpProxy.scheme != 'http') {
+    if (config.proxy!.scheme != 'http') {
       stdout.writeln(' [Error]');
       stderr.writeln('Proxy URI must be valid.');
       return;
@@ -127,7 +81,7 @@ void main(List<String> arguments) async {
 
   late final HttpServer server;
   try {
-    server = await HttpServer.bind(localBindIp, localPort);
+    server = await HttpServer.bind(config.local.host, config.local.port);
   } catch(error) {
     stdout.writeln(' [Error]');
     stderr
@@ -143,16 +97,17 @@ void main(List<String> arguments) async {
       trustedRoots.contains(String.fromCharCodes(cert.sha1));
 
   // Apply HTTP proxy
-  if (httpProxy != null) {
-    if (httpProxyCredentials != null) {
+  if (config.proxy case final Uri proxy) {
+    final credentials = proxy.httpClientCredentials;
+    if (credentials != null) {
       client.addProxyCredentials(
-        httpProxy.host,
-        httpProxy.port,
+        proxy.host,
+        proxy.port,
         'Basic',
-        httpProxyCredentials,
+        credentials,
       );
     }
-    client.findProxy = (uri) => 'PROXY ${httpProxy.host}:${httpProxy.port}';
+    client.findProxy = (uri) => 'PROXY ${proxy.host}:${proxy.port}';
   }
 
   var requestId = 0;
@@ -162,13 +117,12 @@ void main(List<String> arguments) async {
 
     final response = request.response;
 
-    addCORSHeaders(request, response);
-
     // Handle preflight
     if (
       request.method.toUpperCase() == 'OPTIONS' &&
       request.headers[HttpHeaders.accessControlRequestMethodHeader] != null
     ) {
+      addCORSHeaders(request, response);
       stdout.writeln('[$requestId] Preflight handled.');
       response
         ..contentLength = 0
@@ -177,6 +131,7 @@ void main(List<String> arguments) async {
       return;
     }
 
+    final localBasicAuth = config.local.basicAuth;
     if (localBasicAuth != null) {
       final _userAuth = request.headers[HttpHeaders.authorizationHeader]?.singleOrNull;
       if (_userAuth == null || !secureCompare(_userAuth, localBasicAuth)) {
@@ -192,9 +147,9 @@ void main(List<String> arguments) async {
     }
 
     final remoteUri = (UriBuilder.fromUri(request.uri)
-      ..scheme = remoteScheme
-      ..host = remoteHost
-      ..port = remotePort
+      ..scheme = config.remote.scheme
+      ..host = config.remote.host
+      ..port = config.remote.port
     ).build();
 
     stdout.writeln('[$requestId] Forwarding: ${request.method} $remoteUri');
@@ -205,6 +160,7 @@ void main(List<String> arguments) async {
         requestToRemote.followRedirects = false;
 
         // Remote server auth
+        final remoteBasicAuth = config.remote.basicAuth;
         if (remoteBasicAuth != null)
           requestToRemote.headers.add(HttpHeaders.authorizationHeader, remoteBasicAuth);
 
@@ -216,7 +172,7 @@ void main(List<String> arguments) async {
               requestToRemote.headers.add(
                 headerName,
                 headerValues.map(
-                  (value) => value.replaceAll(localBaseUrl, serverBaseUrl),
+                  (value) => value.replaceAll(config.local.toString(), config.remote.toString()),
                 ),
               );
             else
@@ -242,7 +198,7 @@ void main(List<String> arguments) async {
                 response.headers.add(
                   headerName,
                   headerValues.map(
-                    (value) => value.replaceAll(serverBaseUrl, localBaseUrl),
+                    (value) => value.replaceAll(config.remote.toString(), config.local.toString()),
                   ),
                 );
               // Add headers as-is
@@ -250,6 +206,7 @@ void main(List<String> arguments) async {
                 response.headers.add(headerName, headerValues);
           });
           response.statusCode = remoteResponse.statusCode;
+          addCORSHeaders(request, response);
 
           // Pipe remote response
           remoteResponse
@@ -277,6 +234,7 @@ void main(List<String> arguments) async {
             ..writeln('[$requestId] Mirror error:')
             ..writeln(_error);
 
+          addCORSHeaders(request, response);
           response
             ..statusCode = HttpStatus.internalServerError
             ..headers.contentType = ContentType.text
