@@ -13,7 +13,7 @@ class Config {
     if (path != null && File(path).existsSync())
       dotenv.load([ path, ]);
 
-    final proxy = getUri('HTTP_PROXY');
+    final proxy = getUri('HTTP_PROXY', true);
     final local = getUri('LOCAL')
       ?? Uri.http('127.0.0.1:8080');
 
@@ -39,15 +39,16 @@ class Config {
 
   static T? getNum<T extends num>(String variable) => switch(getString(variable)) {
     final String value => switch(T) {
-      double => double.tryParse(value),
-      int => int.tryParse(value),
+      const (double) => double.tryParse(value),
+      const (int) => int.tryParse(value),
       _ => null,
     } as T?,
     _ => null,
   };
 
-  static Uri? getUri(String prefix) => getFullUri('${prefix}_URI')
-    ?? getExplodedUri(prefix);
+  static Uri? getUri(String prefix, [bool noSuffixForFullUri = false]) =>
+    getFullUri(noSuffixForFullUri ? prefix : '${prefix}_URI') ??
+    getExplodedUri(prefix);
 
   static Uri? getFullUri(String variable) => switch(getString(variable)) {
     final String value => Uri.tryParse(value),

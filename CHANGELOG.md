@@ -1,3 +1,7 @@
+# 1.2.1
+
+- Fix HTTP_PROXY variable.
+
 # 1.2.0
 
 - Add `Access-Control-Expose-Headers` header if none is provided by server.
