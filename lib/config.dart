@@ -7,6 +7,7 @@ class Config {
     required this.local,
     required this.remote,
     this.proxy,
+    this.sslKeyLogFile,
   });
 
   factory Config.load(String? path) {
@@ -14,6 +15,9 @@ class Config {
       dotenv.load([ path, ]);
 
     final proxy = getUri('HTTP_PROXY', true);
+
+    final sslKeyLogFile = getString('SSLKEYLOGFILE');
+
     final local = getUri('LOCAL')
       ?? Uri.http('127.0.0.1:8080');
 
@@ -22,12 +26,14 @@ class Config {
 
     return Config._(
       proxy: proxy,
+      sslKeyLogFile: sslKeyLogFile,
       local: local,
       remote: remote,
     );
   }
 
   final Uri? proxy;
+  final String? sslKeyLogFile;
   final Uri local;
   final Uri remote;
 

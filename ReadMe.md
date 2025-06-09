@@ -5,12 +5,13 @@ It will help you to keep private credentials out of build artifacts.
 
 ## Features
 
-* Remote server authentication
-* Local server authentication
-* Referrer spoofing (pretend that request came from target origin)
-* CORS bypass
-* HTTP proxy support
+* Remote server authentication.
+* Local server authentication.
+* Referrer spoofing (pretend that request came from target origin).
+* CORS bypass.
+* HTTP proxy support.
 * Adds `Access-Control-Expose-Headers` to allow browser inspect headers.
+* Debug TLS connections via `SSLKEYLOGFILE`.
 
 ## Usage
 

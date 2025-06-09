@@ -1,3 +1,8 @@
+# 1.3.0
+
+- Add support for `SSLKEYLOGFILE`.
+- Fix internal auth leak to remote server.
+
 # 1.2.1
 
 - Fix HTTP_PROXY variable.

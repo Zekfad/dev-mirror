@@ -96,6 +96,14 @@ void main(List<String> arguments) async {
     ..badCertificateCallback = (cert, host, port) =>
       trustedRoots.contains(String.fromCharCodes(cert.sha1));
 
+  // Allow SSL debugging
+  if (config.sslKeyLogFile case final path?) {
+    final keyLog = File(path)
+      ..createSync(recursive: true);
+    client.keyLog = (line) =>
+      keyLog.writeAsStringSync(line, mode: FileMode.append);
+  }
+
   // Apply HTTP proxy
   if (config.proxy case final Uri proxy) {
     final credentials = proxy.httpClientCredentials;
@@ -127,7 +135,8 @@ void main(List<String> arguments) async {
       response
         ..contentLength = 0
         ..statusCode = HttpStatus.ok
-        ..close();
+        ..close()
+        .ignore();
       return;
     }
 
@@ -141,7 +150,8 @@ void main(List<String> arguments) async {
           ..headers.add(HttpHeaders.wwwAuthenticateHeader, 'Basic realm=Protected')
           ..headers.contentType = ContentType.text
           ..write('PROXY///ERROR///UNAUTHORIZED')
-          ..close();
+          ..close()
+          .ignore();
         return;
       }
     }
@@ -158,11 +168,6 @@ void main(List<String> arguments) async {
       .openUrl(request.method, remoteUri)
       .then((requestToRemote) async {
         requestToRemote.followRedirects = false;
-
-        // Remote server auth
-        final remoteBasicAuth = config.remote.basicAuth;
-        if (remoteBasicAuth != null)
-          requestToRemote.headers.add(HttpHeaders.authorizationHeader, remoteBasicAuth);
 
         request.headers.forEach((headerName, headerValues) {
           // Filter out headers
@@ -181,6 +186,11 @@ void main(List<String> arguments) async {
           }
         });
 
+        // Remote server auth
+        final remoteBasicAuth = config.remote.basicAuth;
+        if (remoteBasicAuth != null)
+          requestToRemote.headers.set(HttpHeaders.authorizationHeader, remoteBasicAuth);
+
         // If there's content pipe request body
         if (request.contentLength > 0)
           await requestToRemote.addStream(request);
@@ -188,7 +198,7 @@ void main(List<String> arguments) async {
         return requestToRemote.close();
       })
       .then(
-        (remoteResponse) async {
+        (remoteResponse) {
           stdout.writeln('[$requestId] Remote response: ${remoteResponse.statusCode}');
           remoteResponse.headers.forEach((headerName, headerValues) {
             // Filter out headers
@@ -240,8 +250,10 @@ void main(List<String> arguments) async {
             ..headers.contentType = ContentType.text
             ..writeln('PROXY///ERROR///INTERNAL')
             ..write(error)
-            ..close();
+            ..close()
+            .ignore();
         },
-      );
+      )
+      .ignore();
   });
 }
